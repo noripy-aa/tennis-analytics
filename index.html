@@ -30,7 +30,7 @@
         .resume-section { background: #111827; border: 1px solid #f59e0b; padding: 12px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
         .resume-card { background: #1e293b; border-left: 4px solid #f59e0b; padding: 10px; border-radius: 6px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; }
 
-        /* 🎮 2. ゲーム画面 (無駄な空間を排除し、ボタンを押しやすく拡大) */
+        /* 🎮 2. ゲーム画面 */
         #screen-input { display: flex; flex-direction: column; padding: 6px; background: #090d16; overflow-y: auto; overflow-x: hidden; }
         .premium-score-board {
             display: flex; justify-content: space-between; align-items: center;
@@ -48,7 +48,6 @@
         .point-count-box { background: #000; border: 1px solid #38bdf8; color: #38bdf8; padding: 1px 10px; border-radius: 4px; font-size: 1.1rem; font-weight: bold; text-shadow: 0 0 6px #38bdf8; min-width: 42px; text-align: center; }
         .vs-divider { color: #475569; font-size: 0.75rem; font-weight: bold; font-style: italic; }
 
-        /* ボタンエリアが画面内のメイン（縦幅の大部分）を占めるようにゆったり配置 */
         .landscape-ctrl { display: flex; gap: 10px; margin-top: 6px; flex: 1; min-height: 65vh; }
         .ctrl-col { display: flex; flex-direction: column; gap: 8px; flex: 1; }
         .col-side { flex: 1.2; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -264,24 +263,21 @@
         <button id="nav-toggle-btn" class="nav-btn" onclick="toggleInputStats()">📊 集計画面を見る</button>
     </footer>
 
-   </footer>
-
-    <script type="module"> // 💡ここを「type="module"」に書き換えます！
-        // 🛑 ここから追加：Firebase本体とデータベース（Firestore）のインストール
+    <script type="module">
+        // Firebaseライブラリの読み込み
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-apps.js";
         import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
 
-        // 🛑 ここに、さっきFirebaseの画面に表示された「あなた専用の鍵」をそのまま貼り付けます
+        // Firebase設定情報
         const firebaseConfig = {
-          apiKey: "AIzaSy...",
-          authDomain: "tennis-analytics...",
-          projectId: "tennis-analytics...",
-          storageBucket: "...",
-          messagingSenderId: "...",
-          appId: "..."
+         apiKey: "AIzaSyAikqg3h2gITMm2-BsfNhQPegR7pwVbpDE",
+  　　　　authDomain: "tennis-analytics-574d0.firebaseapp.com",
+  　　　　projectId: "tennis-analytics-574d0",
+  　　　　storageBucket: "tennis-analytics-574d0.firebasestorage.app",
+  　　　　messagingSenderId: "437341861715",
+  　　　　appId: "1:437341861715:web:8c38cd333deb2b156d53a6"
         };
 
-        // 🛑 Firebaseとデータベースを起動する命令
         const app = initializeApp(firebaseConfig);
         const db = getFirestore(app);
         const STORAGE_KEY = 'tennis_analytics_permanent_history';
@@ -306,6 +302,7 @@
         let isFirstServe = true;
         let currentInput = { player: 'A', shot: 'サーブ', course: '' };
         let shotHistoryStack = [];
+        let unsubscribeMatch = null; // リモート同期解除用
 
         window.onload = function() {
             document.getElementById('match-date').value = new Date().toISOString().split('T')[0];
@@ -335,6 +332,67 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
         }
 
+        // Firebase（クラウド）へデータを送信する仕組み
+        async function saveMatchData() {
+            const matchData = {
+                meta: matchMeta,
+                score: score,
+                server: currentGameServer,
+                stats: statsCounter,
+                rally: currentRallyCount,
+                isFirstServe: isFirstServe,
+                currentInput: currentInput,
+                historyStack: shotHistoryStack,
+                updatedAt: Date.now()
+            };
+
+            // 1. ローカル(スマホ内)に保存
+            let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+            const idx = history.findIndex(m => m.meta.id === matchMeta.id);
+            if (idx >= 0) history[idx] = matchData; else history.push(matchData);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+
+            // 2. クラウド(Firebase)にリアルタイム同期送信
+            if (matchMeta.id) {
+                try {
+                    await setDoc(doc(db, "matches", matchMeta.id), matchData);
+                } catch (e) {
+                    console.error("Firebaseへの同期に失敗しました: ", e);
+                }
+            }
+        }
+
+        // Firebaseからデータを受信して画面を自動更新する仕組み（他端末連動用）
+        function listenToRemoteMatch(matchId) {
+            if (unsubscribeMatch) unsubscribeMatch();
+            unsubscribeMatch = onSnapshot(doc(db, "matches", matchId), (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    // クラウド側のデータの方が新しい場合のみ画面を書き換える
+                    if (!data.updatedAt || data.updatedAt > (window.lastLocalUpdate || 0)) {
+                        matchMeta = data.meta;
+                        score = data.score;
+                        currentGameServer = data.server;
+                        statsCounter = data.stats;
+                        currentRallyCount = data.rally;
+                        isFirstServe = data.isFirstServe;
+                        currentInput = data.currentInput;
+                        shotHistoryStack = data.historyStack || [];
+                        
+                        setupActiveMatchUI();
+                        updateUI();
+                        calculateStatsAndRender();
+
+                        // 試合が終了していたらホームへ
+                        if (matchMeta.isFinished && !document.getElementById('screen-input').classList.contains('hidden')) {
+                            alert(`試合終了！勝者: ${score.aGame > score.bGame ? matchMeta.pAName : matchMeta.pBName}`);
+                            goToHome();
+                        }
+                    }
+                }
+            });
+        }
+
         function startNewMatch() {
             matchMeta.id = 'match_' + Date.now();
             matchMeta.date = document.getElementById('match-date').value;
@@ -353,6 +411,9 @@
             document.getElementById('screen-input').classList.remove('hidden');
             document.getElementById('app-footer').classList.remove('hidden');
             prepareNextPoint();
+
+            // リアルタイムリスナー開始
+            listenToRemoteMatch(matchMeta.id);
         }
 
         function setupActiveMatchUI() {
@@ -363,15 +424,17 @@
             
             const ids = [ 'stat-name', 'ratio-title', 'missn-title', 'misso-title' ];
             ids.forEach(id => {
-                document.getElementById(`${id}-A`).innerText = matchMeta.pAName;
-                document.getElementById(`${id}-B`).innerText = matchMeta.pBName;
+                if(document.getElementById(`${id}-A`)) document.getElementById(`${id}-A`).innerText = matchMeta.pAName;
+                if(document.getElementById(`${id}-B`)) document.getElementById(`${id}-B`).innerText = matchMeta.pBName;
             });
             
-            document.getElementById('ace-header-A').innerText = `▼ ${matchMeta.pAName} エース内訳`;
-            document.getElementById('ace-header-B').innerText = `▼ ${matchMeta.pBName} エース内訳`;
-            document.getElementById('ace-header-B').classList.remove('hidden');
-            document.getElementById('matrix-ace-B').classList.remove('hidden');
-            document.getElementById('versus-opponents-section').classList.add('hidden');
+            if(document.getElementById('ace-header-A')) document.getElementById('ace-header-A').innerText = `▼ ${matchMeta.pAName} エース内訳`;
+            if(document.getElementById('ace-header-B')) {
+                document.getElementById('ace-header-B').innerText = `▼ ${matchMeta.pBName} エース内訳`;
+                document.getElementById('ace-header-B').classList.remove('hidden');
+            }
+            if(document.getElementById('matrix-ace-B')) document.getElementById('matrix-ace-B').classList.remove('hidden');
+            if(document.getElementById('versus-opponents-section')) document.getElementById('versus-opponents-section').classList.add('hidden');
 
             document.getElementById('stats-title').innerText = `📊 総合集計表 [${matchMeta.pAName} vs ${matchMeta.pBName}]`;
             document.getElementById('nav-toggle-btn').classList.remove('hidden');
@@ -400,14 +463,15 @@
             
             let courseIds = { 'クロス':'cross', '逆クロス':'rcross', 'ストレート':'straight', 'センター':'center', 'ロブ':'lob', 'ドロップ':'drop' };
             let bId = `btn-c-${courseIds[course]}`;
-            document.getElementById(bId).classList.add('selected');
-            setTimeout(() => document.getElementById(bId).classList.remove('selected'), 150);
+            if(document.getElementById(bId)) document.getElementById(bId).classList.add('selected');
+            setTimeout(() => { if(document.getElementById(bId)) document.getElementById(bId).classList.remove('selected'); }, 150);
 
             const hitter = currentInput.player;
             shotHistoryStack.push({
                 rallyCount: currentRallyCount, isFirstServe: isFirstServe,
                 inputState: { ...currentInput }, scoreState: { ...score },
-                statsState: JSON.parse(JSON.stringify(statsCounter))
+                statsState: JSON.parse(JSON.stringify(statsCounter)),
+                serverState: currentGameServer
             });
 
             if (currentInput.shot === 'フォア') statsCounter[hitter].countFore++;
@@ -424,11 +488,13 @@
             const nextPlayer = (hitter === 'A' ? 'B' : 'A');
             selectPlayer(nextPlayer);
             selectShot(currentInput.shot === 'ボレー' ? 'フォア' : currentInput.shot);
+            window.lastLocalUpdate = Date.now();
             updateUI(); saveMatchData();
         }
 
         function selectResult(resultType) {
             const hitter = currentInput.player; 
+            window.lastLocalUpdate = Date.now();
             if (resultType === 'エース') {
                 const winner = (hitter === 'A' ? 'B' : 'A');
                 let wName = winner === 'A' ? matchMeta.pAName : matchMeta.pBName;
@@ -447,7 +513,7 @@
                     if (isFirstServe) {
                         statsCounter[hitter].firstTotal++; isFirstServe = false;
                         logMessage(`> ⚠️ ${lName} 1stフォルト`);
-                        selectPlayer(hitter); selectShot('サーブ'); updateUI(); return;
+                        selectPlayer(hitter); selectShot('サーブ'); updateUI(); saveMatchData(); return;
                     } else {
                         statsCounter[hitter].secondTotal++; statsCounter[hitter].df++;
                         logMessage(`> 🛑 ${lName} ダブルフォルト`);
@@ -473,6 +539,7 @@
         function addDirectPointFromConsole() {
             const target = currentInput.player; statsCounter[target].otherPt++;
             logMessage(`> 🚨 見逃し判定 ［${target==='A'?matchMeta.pAName:matchMeta.pBName}］ Pt追加`);
+            window.lastLocalUpdate = Date.now();
             addPoint(target);
         }
 
@@ -523,246 +590,260 @@
 
         function undoLastShot() {
             if (shotHistoryStack.length === 0) return;
+            window.lastLocalUpdate = Date.now();
             const prevState = shotHistoryStack.pop();
-            currentRallyCount = prevState.rallyCount; isFirstServe = prevState.isFirstServe; score = prevState.scoreState; statsCounter = prevState.statsState;
-            selectPlayer(prevState.inputState.player); selectShot(prevState.inputState.shot);
-            logMessage(`> ↩️ 1打取り消しました`); updateUI(); saveMatchData();
+            currentRallyCount = prevState.rallyCount; 
+            isFirstServe = prevState.isFirstServe;
+            currentInput = { ...prevState.inputState };
+            score = { ...prevState.scoreState };
+            statsCounter = JSON.parse(JSON.stringify(prevState.statsState));
+            currentGameServer = prevState.serverState || currentGameServer;
+            logMessage(`> ↩️ 1打取り消しました`);
+            updateUI(); saveMatchData();
         }
 
-        function saveMatchData() {
-            let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            const matchData = { meta: { ...matchMeta }, score: { ...score }, stats: { ...statsCounter }, currentGameServer, shotHistoryStack };
-            const idx = history.findIndex(h => h.meta.id === matchMeta.id);
-            if (idx > -1) history[idx] = matchData; else history.push(matchData);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+        // スタッツ集計と画面表示処理
+        function calculateStatsAndRender() {
+            const calcPct = (inCount, total) => total === 0 ? '-' : Math.round((inCount / total) * 100) + '%';
+            
+            document.getElementById('stat-A-1st').innerText = calcPct(statsCounter.A.firstIn, statsCounter.A.firstTotal);
+            document.getElementById('stat-B-1st').innerText = calcPct(statsCounter.B.firstIn, statsCounter.B.firstTotal);
+            document.getElementById('stat-A-2nd').innerText = calcPct(statsCounter.B.df, statsCounter.A.secondTotal); // 相手DF除外等のロジック
+            document.getElementById('stat-B-2nd').innerText = calcPct(statsCounter.A.df, statsCounter.B.secondTotal);
+            
+            document.getElementById('stat-A-df').innerText = statsCounter.A.df;
+            document.getElementById('stat-B-df').innerText = statsCounter.bPt ? statsCounter.B.df : statsCounter.B.df;
+            document.getElementById('stat-A-ace').innerText = statsCounter.A.aces;
+            document.getElementById('stat-B-ace').innerText = statsCounter.B.aces;
+            document.getElementById('stat-A-miss').innerText = statsCounter.A.strokeMiss;
+            document.getElementById('stat-B-miss').innerText = statsCounter.B.strokeMiss;
+            document.getElementById('stat-A-other').innerText = statsCounter.A.otherPt;
+            document.getElementById('stat-B-other').innerText = statsCounter.B.otherPt;
+
+            const calcRatio = (cnt, total) => total === 0 ? '0%' : Math.round((cnt / total) * 100) + '%';
+            const totalA = statsCounter.A.countFore + statsCounter.A.countBack + statsCounter.A.countVolley;
+            const totalB = statsCounter.B.countFore + statsCounter.B.countBack + statsCounter.B.countVolley;
+            
+            document.getElementById('ratio-A-fore').innerText = calcRatio(statsCounter.A.countFore, totalA);
+            document.getElementById('ratio-B-fore').innerText = calcRatio(statsCounter.B.countFore, totalB);
+            document.getElementById('ratio-A-back').innerText = calcRatio(statsCounter.A.countBack, totalA);
+            document.getElementById('ratio-B-back').innerText = calcRatio(statsCounter.B.countBack, totalB);
+            document.getElementById('ratio-A-volley').innerText = calcRatio(statsCounter.A.countVolley, totalA);
+            document.getElementById('ratio-B-volley').innerText = calcRatio(statsCounter.B.countVolley, totalB);
+
+            // ミス内訳
+            document.getElementById('net-A-fore').innerText = statsCounter.A.netFore;
+            document.getElementById('net-B-fore').innerText = statsCounter.B.netFore;
+            document.getElementById('net-A-back').innerText = statsCounter.A.netBack;
+            document.getElementById('net-B-back').innerText = statsCounter.B.netBack;
+            document.getElementById('net-A-volley').innerText = statsCounter.A.netVolley;
+            document.getElementById('net-B-volley').innerText = statsCounter.B.netVolley;
+
+            document.getElementById('out-A-fore').innerText = statsCounter.A.outFore;
+            document.getElementById('out-B-fore').innerText = statsCounter.B.outFore;
+            document.getElementById('out-A-back').innerText = statsCounter.A.outBack;
+            document.getElementById('out-B-back').innerText = statsCounter.B.outBack;
+            document.getElementById('out-A-volley').innerText = statsCounter.A.outVolley;
+            document.getElementById('out-B-volley').innerText = statsCounter.B.outVolley;
+
+            // マトリクステーブル生成
+            renderMatrix('matrix-ace-A', statsCounter.A.aceMatrix);
+            renderMatrix('matrix-ace-B', statsCounter.B.aceMatrix);
         }
 
+        function renderMatrix(targetId, matrix) {
+            let html = `<tr><th>ショット</th>` + COURSES.map(c => `<th>${c}</th>`).join('') + `</tr>`;
+            SHOTS.forEach(s => {
+                html += `<tr><td><strong>${s}</strong></td>`;
+                COURSES.forEach(c => { html += `<td>${matrix[s][c] || 0}</td>`; });
+                html += `</tr>`;
+            });
+            if(document.getElementById(targetId)) document.getElementById(targetId).innerHTML = html;
+        }
+
+        // ダッシュボード履歴の読み込み
         function loadDashboard() {
             const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            const resumeArea = document.getElementById('resume-section-area');
             const resumeList = document.getElementById('resume-list');
             const historyList = document.getElementById('history-list');
-            const playerList = document.getElementById('player-stats-list');
+            const playerStatsList = document.getElementById('player-stats-list');
             
-            resumeList.innerHTML = ''; historyList.innerHTML = ''; playerList.innerHTML = '';
-            let hasOngoing = false; let playerDatabase = {};
+            resumeList.innerHTML = ''; historyList.innerHTML = ''; playerStatsList.innerHTML = '';
+            let hasActive = false; let pStats = {};
 
-            history.forEach((match, index) => {
-                if(!match || !match.meta) return;
-                if(!match.meta.id) match.meta.id = 'match_' + index;
-
-                if (!match.meta.isFinished) {
-                    hasOngoing = true;
-                    const card = document.createElement('div'); card.className = 'resume-card';
-                    card.innerHTML = `
-                        <div class="card-info">📅 ${match.meta.date || '不明'}<br>⚔️ ${match.meta.pAName || '選手A'} vs ${match.meta.pBName || '選手B'} (${match.score ? match.score.aGame : 0}-${match.score ? match.score.bGame : 0})</div>
-                        <div style="display:flex; gap:3px;">
-                            <button class="action-btn" style="background:#f59e0b; padding:6px 10px;" onclick="resumeMatchData('${match.meta.id}')">🎮 再開</button>
-                            <button class="action-btn" style="background:#10b981; padding:6px 10px;" onclick="forceFinishMatch('${match.meta.id}')">✅ 完了</button>
-                            <button class="action-btn" style="background:#64748b; padding:6px 10px;" onclick="deleteMatchData('${match.meta.id}')">🗑️ 削除</button>
+            history.forEach(m => {
+                if (!m.meta.isFinished) {
+                    hasActive = true;
+                    resumeList.innerHTML += `
+                        <div class="resume-card">
+                            <div class="card-info">
+                                <strong>📅 ${m.meta.date}</strong><br>
+                                <span style="color:#38bdf8;">${m.meta.pAName} (${m.score.aGame}) vs (${m.score.bGame}) ${m.meta.pBName}</span>
+                            </div>
+                            <div>
+                                <button class="action-btn" style="background:#f59e0b;" onclick="window.resumeMatch('${m.meta.id}')">再開</button>
+                                <button class="action-btn" style="background:#ef4444;" onclick="window.deleteMatch('${m.meta.id}')">削除</button>
+                            </div>
                         </div>`;
-                    resumeList.appendChild(card);
                 } else {
-                    const card = document.createElement('div'); card.className = 'data-card';
-                    card.innerHTML = `
-                        <div class="card-info">📅 ${match.meta.date}<br>⚔️ ${match.meta.pAName} [${match.score.aGame}-${match.score.bGame}] ${match.meta.pBName}</div>
-                        <button class="action-btn" onclick="viewPastMatch('${match.meta.id}')">📊 スタッツ</button>`;
-                    historyList.appendChild(card);
+                    historyList.innerHTML += `
+                        <div class="data-card">
+                            <div class="card-info">
+                                <strong>📅 ${m.meta.date}</strong> [${m.meta.format}G先取]<br>
+                                <span>${m.meta.pAName} <strong style="color:#10b981;">${m.score.aGame}</strong> - <strong style="color:#10b981;">${m.score.bGame}</strong> ${m.meta.pBName}</span>
+                            </div>
+                            <button class="action-btn" onclick="window.viewPastStats('${m.meta.id}')">分析</button>
+                        </div>`;
+                    
+                    // 個人成績の加算
+                    [m.meta.pAName, m.meta.pBName].forEach(p => { if(!pStats[p]) pStats[p] = { win:0, lose:0 }; });
+                    if(m.score.aGame > m.score.bGame) { pStats[m.meta.pAName].win++; pStats[m.meta.pBName].lose++; }
+                    else { pStats[m.meta.pBName].win++; pStats[m.meta.pAName].lose++; }
                 }
-
-                [ {name: match.meta.pAName, key: 'A', oppName: match.meta.pBName, myG: match.score?.aGame||0, oppG: match.score?.bGame||0}, 
-                  {name: match.meta.pBName, key: 'B', oppName: match.meta.pAName, myG: match.score?.bGame||0, oppG: match.score?.aGame||0} ].forEach(p => {
-                    if (!p.name || p.name === 'PLAYER A' || p.name === 'PLAYER B' || p.name === '') return;
-                    
-                    if (!playerDatabase[p.name]) { 
-                        playerDatabase[p.name] = createEmptyStats(); 
-                        playerDatabase[p.name].matchCount = 0;
-                        playerDatabase[p.name].opponents = {};
-                    }
-                    
-                    if(match.meta.isFinished) {
-                        playerDatabase[p.name].matchCount++;
-                        Object.keys(createEmptyStats()).forEach(k => { if(k!=='aceMatrix') playerDatabase[p.name][k] += match.stats[p.key][k]; });
-                        SHOTS.forEach(s => { COURSES.forEach(c => { playerDatabase[p.name].aceMatrix[s][c] += match.stats[p.key].aceMatrix[s][c]; }); });
-                        
-                        if(!playerDatabase[p.name].opponents[p.oppName]) {
-                            playerDatabase[p.name].opponents[p.oppName] = { matches: 0, wins: 0, losses: 0, totalMyG: 0, totalOppG: 0, totalAces: 0, totalMiss: 0 };
-                        }
-                        let oppState = playerDatabase[p.name].opponents[p.oppName];
-                        oppState.matches++;
-                        if(p.myG > p.oppG) oppState.wins++; else oppState.losses++;
-                        oppState.totalMyG += p.myG;
-                        oppState.totalOppG += p.oppG;
-                        oppState.totalAces += match.stats[p.key].aces;
-                        oppState.totalMiss += match.stats[p.key].strokeMiss;
-                    }
-                });
             });
 
-            if (hasOngoing) resumeArea.classList.remove('hidden'); else resumeArea.classList.add('hidden');
-            if (historyList.innerHTML === '') historyList.innerHTML = '<div style="color:#64748b; font-size:0.8rem;">完了した履歴はありません</div>';
+            document.getElementById('resume-section-area').classList.toggle('hidden', !hasActive);
 
-            Object.keys(playerDatabase).forEach(name => {
-                if(playerDatabase[name].matchCount === 0) return;
-                const card = document.createElement('div'); card.className = 'data-card'; card.style.borderLeft = "4px solid #10b981";
-                card.innerHTML = `<div class="card-info"><strong>👤 ${name}</strong><br>📊 消化試合数: ${playerDatabase[name].matchCount}</div><button class="action-btn" style="background:#10b981;" onclick="viewPlayerTotalStats('${name}')">📈 通算</button>`;
-                playerList.appendChild(card);
-            });
-            window.globalPlayerDatabase = playerDatabase;
+            // 選手一覧の表示
+            for(let p in pStats) {
+                const total = pStats[p].win + pStats[p].lose;
+                const rate = total === 0 ? '0%' : Math.round((pStats[p].win / total) * 100) + '%';
+                playerStatsList.innerHTML += `
+                    <div class="data-card">
+                        <div class="card-info">
+                            <strong style="font-size:0.9rem; color:#38bdf8;">👤 ${p}</strong><br>
+                            <span>通算成績: ${pStats[p].win}勝 ${pStats[p].lose}敗 (勝率 ${rate})</span>
+                        </div>
+                        <button class="action-btn" style="background:#10b981;" onclick="window.viewPlayerTotalStats('${p}')">詳細</button>
+                    </div>`;
+            }
         }
 
-        function resumeMatchData(matchId) {
+        // グローバルに関数を公開してHTMLボタンから呼べるようにする
+        window.resumeMatch = function(matchId) {
             const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            const last = history.find(h => h.meta && h.meta.id === matchId); if (!last) return;
-            matchMeta = last.meta; score = last.score; statsCounter = last.stats; currentGameServer = last.currentGameServer || 'A'; shotHistoryStack = last.shotHistoryStack || [];
-            setupActiveMatchUI();
-            document.getElementById('screen-home').classList.add('hidden'); document.getElementById('screen-input').classList.remove('hidden'); document.getElementById('app-footer').classList.remove('hidden');
-            updateUI();
-        }
-
-        function forceFinishMatch(matchId) {
-            if(!confirm("この試合を「完了」として履歴に移しますか？")) return;
-            let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            const idx = history.findIndex(h => h.meta && h.meta.id === matchId);
-            if (idx > -1) { history[idx].meta.isFinished = true; localStorage.setItem(STORAGE_KEY, JSON.stringify(history)); loadDashboard(); }
-        }
-
-        function deleteMatchData(matchId) {
-            if(!confirm("この試合データを完全に削除しますか？")) return;
-            let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            history = history.filter(h => h && h.meta && h.meta.id !== matchId && h.meta.id !== undefined);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(history)); loadDashboard();
-        }
-
-        function viewPastMatch(matchId) {
-            const history = JSON.parse(localStorage.getItem(STORAGE_KEY));
-            const match = history.find(h => h.meta.id === matchId);
-            matchMeta = match.meta; score = match.score; statsCounter = match.stats;
-            setupActiveMatchUI(); renderStatsTable(match.stats.A, match.stats.B); showStatsScreen();
-        }
-
-        function viewPlayerTotalStats(pName) {
-            const pData = window.globalPlayerDatabase[pName];
-            const ids = [ 'stat-name', 'ratio-title', 'missn-title', 'misso-title' ];
-            ids.forEach(id => { document.getElementById(`${id}-A`).innerText = pName; document.getElementById(`${id}-B`).innerText = "-"; });
+            const m = history.find(x => x.meta.id === matchId);
+            if (!m) return;
+            matchMeta = m.meta; score = m.score; currentGameServer = m.server;
+            statsCounter = m.stats; currentRallyCount = m.rally; isFirstServe = m.isFirstServe;
+            shotHistoryStack = m.historyStack || [];
             
-            document.getElementById('stats-title').innerText = `📈 通算データ総計 ［${pName}］`;
+            setupActiveMatchUI(); updateUI();
+            document.getElementById('screen-home').classList.add('hidden');
+            document.getElementById('screen-input').classList.remove('hidden');
+            document.getElementById('app-footer').classList.remove('hidden');
+
+            listenToRemoteMatch(matchId); // リアルタイム同期開始
+        };
+
+        window.deleteMatch = function(matchId) {
+            if(!confirm("この試合データを削除しますか？")) return;
+            let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+            history = history.filter(x => x.meta.id !== matchId);
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
+            loadDashboard();
+        };
+
+        window.viewPastStats = function(matchId) {
+            const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+            const m = history.find(x => x.meta.id === matchId);
+            if (!m) return;
+            matchMeta = m.meta; score = m.score; statsCounter = m.stats;
+            setupActiveMatchUI(); calculateStatsAndRender();
             document.getElementById('btn-resume-from-stats').classList.add('hidden');
+            document.getElementById('screen-home').classList.add('hidden');
+            document.getElementById('screen-stats').classList.remove('hidden');
+            document.getElementById('app-footer').classList.remove('hidden');
+            document.getElementById('nav-toggle-btn').classList.add('hidden');
+        };
+
+        window.viewPlayerTotalStats = function(playerName) {
+            const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+            let total = createEmptyStats(); let versus = {};
             
-            document.getElementById('ace-header-A').innerText = `▼ ${pName} のエース内訳`;
+            history.forEach(m => {
+                if(!m.meta.isFinished) return;
+                let side = m.meta.pAName === playerName ? 'A' : (m.meta.pBName === playerName ? 'B' : null);
+                if(!side) return;
+                let oppName = side === 'A' ? m.meta.pBName : m.meta.pAName;
+                let isWin = side === 'A' ? (m.score.aGame > m.score.bGame) : (m.score.bGame > m.score.aGame);
+
+                // 対戦相手別データ
+                if(!versus[oppName]) versus[oppName] = { win:0, lose:0 };
+                if(isWin) versus[oppName].win++; else versus[oppName].lose++;
+
+                // スタッツ合算
+                let s = m.stats[side];
+                total.firstTotal += s.firstTotal; total.firstIn += s.firstIn;
+                total.secondTotal += s.secondTotal; total.df += s.df; total.aces += s.aces;
+                total.strokeMiss += s.strokeMiss; total.otherPt += s.otherPt;
+                total.countFore += s.countFore; total.countBack += s.countBack; total.countVolley += s.countVolley;
+                total.netFore += s.netFore; total.netBack += s.netBack; total.netVolley += s.netVolley;
+                total.outFore += s.outFore; total.outBack += s.outBack; total.outVolley += s.outVolley;
+                SHOTS.forEach(sh => { COURSES.forEach(c => { total.aceMatrix[sh][c] += s.aceMatrix[sh][c] || 0; }); });
+            });
+
+            matchMeta = { id:'', pAName: playerName, pBName: '他全選手通算', isFinished: true };
+            statsCounter = { A: total, B: createEmptyStats() };
+
+            setupActiveMatchUI(); calculateStatsAndRender();
+
+            // 対戦成績テーブル生成
+            let vHtml = `<thead><tr><th>対戦相手</th><th>勝敗</th><th>勝率</th></tr></thead><tbody>`;
+            for(let op in versus) {
+                let t = versus[op].win + versus[op].lose;
+                vHtml += `<tr><td><strong>${op}</strong></td><td>${versus[op].win}勝 ${versus[op].lose}敗</td><td>${Math.round(versus[op].win/t*100)}%</td></tr>`;
+            }
+            vHtml += `</tbody>`;
+            document.getElementById('versus-table-body').innerHTML = vHtml;
+            document.getElementById('versus-opponents-section').classList.remove('hidden');
+
+            document.getElementById('stats-title').innerText = `👤 ${playerName} 個人通算アナリティクス`;
             document.getElementById('ace-header-B').classList.add('hidden');
             document.getElementById('matrix-ace-B').classList.add('hidden');
-
-            const versusSection = document.getElementById('versus-opponents-section');
-            const versusTable = document.getElementById('versus-table-body');
-            versusSection.classList.remove('hidden');
+            document.getElementById('btn-resume-from-stats').classList.add('hidden');
+            document.getElementById('nav-toggle-btn').classList.add('hidden');
             
-            let tableHTML = `
-                <thead>
-                    <tr>
-                        <th>対戦相手</th>
-                        <th>試合数</th>
-                        <th>勝敗 (勝率)</th>
-                        <th>平均得/失G</th>
-                        <th>エース/ミス</th>
-                    </tr>
-                </thead>
-                <tbody>`;
-            
-            const opps = pData.opponents || {};
-            const oppNames = Object.keys(opps);
-            if(oppNames.length === 0) {
-                tableHTML += `<tr><td colspan="5" style="color:#64748b;">対戦履歴がありません</td></tr>`;
+            document.getElementById('screen-home').classList.add('hidden');
+            document.getElementById('screen-stats').classList.remove('hidden');
+            document.getElementById('app-footer').classList.remove('hidden');
+        };
+
+        window.goToHome = function() {
+            if (unsubscribeMatch) { unsubscribeMatch(); unsubscribeMatch = null; }
+            document.getElementById('screen-input').classList.add('hidden');
+            document.getElementById('screen-stats').classList.add('hidden');
+            document.getElementById('app-footer').classList.add('hidden');
+            document.getElementById('screen-home').classList.remove('hidden');
+            loadDashboard();
+        };
+
+        window.toggleInputStats = function() {
+            const inputHidden = document.getElementById('screen-input').classList.contains('hidden');
+            if (inputHidden) {
+                document.getElementById('screen-stats').classList.add('hidden');
+                document.getElementById('screen-input').classList.remove('hidden');
+                document.getElementById('nav-toggle-btn').innerText = "📊 集計画面を見る";
             } else {
-                oppNames.forEach(oName => {
-                    let o = opps[oName];
-                    let winRate = o.matches > 0 ? Math.round((o.wins / o.matches) * 100) : 0;
-                    let avgMyG = (o.totalMyG / o.matches).toFixed(1);
-                    let avgOppG = (o.totalOppG / o.matches).toFixed(1);
-                    tableHTML += `
-                        <tr>
-                            <td style="font-weight:bold; color:#38bdf8;">${oName}</td>
-                            <td>${o.matches}</td>
-                            <td style="color:${winRate>=50?'#10b981':'#ef4444'}">${o.wins}勝${o.losses}敗 (${winRate}%)</td>
-                            <td>${avgMyG} / ${avgOppG}</td>
-                            <td><span style="color:#38bdf8;">${o.totalAces}</span> / <span style="color:#ef4444;">${o.totalMiss}</span></td>
-                        </tr>`;
-                });
+                calculateStatsAndRender();
+                document.getElementById('screen-input').classList.add('hidden');
+                document.getElementById('screen-stats').classList.remove('hidden');
+                document.getElementById('nav-toggle-btn').innerText = "🎮 入力画面に戻る";
             }
-            tableHTML += `</tbody>`;
-            versusTable.innerHTML = tableHTML;
+        };
 
-            renderStatsTable(pData, createEmptyStats()); 
-            showStatsScreen();
-        }
-
-        function toggleInputStats() {
-            const inputDisp = document.getElementById('screen-input');
-            const statsDisp = document.getElementById('screen-stats');
-            const btn = document.getElementById('nav-toggle-btn');
-            if (inputDisp.classList.contains('hidden')) {
-                inputDisp.classList.remove('hidden'); statsDisp.classList.add('hidden');
-                btn.innerText = "📊 集計画面を見る";
-            } else {
-                renderStatsTable(statsCounter.A, statsCounter.B);
-                inputDisp.classList.add('hidden'); statsDisp.classList.remove('hidden');
-                btn.innerText = "🎮 ゲーム画面に戻る";
-            }
-        }
-
-        function resumeMatchFromStats() {
+        window.resumeMatchFromStats = function() {
             document.getElementById('screen-stats').classList.add('hidden');
             document.getElementById('screen-input').classList.remove('hidden');
             document.getElementById('nav-toggle-btn').innerText = "📊 集計画面を見る";
-        }
+        };
 
-        function switchTab(tabKey) {
-            ['ratio', 'ace', 'miss'].forEach(k => {
-                document.getElementById(`tab-${k}`).classList.remove('active');
-                document.getElementById(`panel-${k}`).classList.add('hidden');
+        window.switchTab = function(tab) {
+            ['ratio', 'ace', 'miss'].forEach(t => {
+                document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+                document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
             });
-            document.getElementById(`tab-${tabKey}`).classList.add('active');
-            document.getElementById(`panel-${tabKey}`).classList.remove('hidden');
-        }
-
-        function showStatsScreen() { document.getElementById('screen-home').classList.add('hidden'); document.getElementById('screen-stats').classList.remove('hidden'); document.getElementById('app-footer').classList.remove('hidden'); document.getElementById('nav-toggle-btn').classList.add('hidden'); switchTab('ratio'); }
-        function goToHome() { document.getElementById('screen-input').classList.add('hidden'); document.getElementById('screen-stats').classList.add('hidden'); document.getElementById('app-footer').classList.add('hidden'); document.getElementById('screen-home').classList.remove('hidden'); loadDashboard(); }
-
-        function buildMatrixHTML(matrix) {
-            let html = `<thead><tr><th>球種</th>`; COURSES.forEach(c => html += `<th>${c}</th>`); html += `</tr></thead><tbody>`;
-            SHOTS.forEach(s => { html += `<tr><td style="font-weight:bold; background:#1e293b;">${s}</td>`; COURSES.forEach(c => { html += `<td>${matrix[s][c] || 0}</td>`; }); html += `</tr>`; });
-            html += `</tbody>`; return html;
-        }
-
-        function renderStatsTable(dataA, dataB) {
-            const pct = (v, t) => t > 0 ? `${Math.round((v / t) * 100)}%(${v}/${t})` : "0%(0/0)";
-            document.getElementById('stat-A-1st').innerText = pct(dataA.firstIn, dataA.firstTotal);
-            document.getElementById('stat-B-1st').innerText = pct(dataB.firstIn, dataB.firstTotal);
-            document.getElementById('stat-A-2nd').innerText = pct(dataA.secondIn, dataA.secondTotal);
-            document.getElementById('stat-B-2nd').innerText = pct(dataB.secondIn, dataB.secondTotal);
-            document.getElementById('stat-A-df').innerText = dataA.df; document.getElementById('stat-B-df').innerText = dataB.df;
-            document.getElementById('stat-A-ace').innerText = dataA.aces; document.getElementById('stat-B-ace').innerText = dataB.aces;
-            document.getElementById('stat-A-miss').innerText = dataA.strokeMiss; document.getElementById('stat-B-miss').innerText = dataB.strokeMiss;
-            document.getElementById('stat-A-other').innerText = dataA.otherPt; document.getElementById('stat-B-other').innerText = dataB.otherPt;
-
-            let tA = dataA.countFore + dataA.countBack + dataA.countVolley, tB = dataB.countFore + dataB.countBack + dataB.countVolley;
-            const rPct = (v, t) => t > 0 ? `${Math.round((v / t) * 100)}%(${v}本)` : "0%(0本)";
-            document.getElementById('ratio-A-fore').innerText = rPct(dataA.countFore, tA);
-            document.getElementById('ratio-B-fore').innerText = rPct(dataB.countFore, tB);
-            document.getElementById('ratio-A-back').innerText = rPct(dataA.countBack, tA);
-            document.getElementById('ratio-B-back').innerText = rPct(dataB.countBack, tB);
-            document.getElementById('ratio-A-volley').innerText = rPct(dataA.countVolley, tA);
-            document.getElementById('ratio-B-volley').innerText = rPct(dataB.countVolley, tB);
-
-            document.getElementById('matrix-ace-A').innerHTML = buildMatrixHTML(dataA.aceMatrix);
-            document.getElementById('matrix-ace-B').innerHTML = buildMatrixHTML(dataB.aceMatrix);
-            document.getElementById('net-A-fore').innerText = dataA.netFore; document.getElementById('net-B-fore').innerText = dataB.netFore;
-            document.getElementById('net-A-back').innerText = dataA.netBack; document.getElementById('net-B-back').innerText = dataB.netBack;
-            document.getElementById('net-A-volley').innerText = dataA.netVolley; document.getElementById('net-B-volley').innerText = dataB.netVolley;
-            document.getElementById('out-A-fore').innerText = dataA.outFore; document.getElementById('out-B-fore').innerText = dataB.outFore;
-            document.getElementById('out-A-back').innerText = dataA.outBack; document.getElementById('out-B-back').innerText = dataB.outBack;
-            document.getElementById('out-A-volley').innerText = dataA.outVolley; document.getElementById('out-B-volley').innerText = dataB.outVolley;
-        }
+        };
     </script>
 </body>
 </html>
