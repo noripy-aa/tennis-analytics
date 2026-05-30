@@ -264,7 +264,26 @@
         <button id="nav-toggle-btn" class="nav-btn" onclick="toggleInputStats()">📊 集計画面を見る</button>
     </footer>
 
-    <script>
+   </footer>
+
+    <script type="module"> // 💡ここを「type="module"」に書き換えます！
+        // 🛑 ここから追加：Firebase本体とデータベース（Firestore）のインストール
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-apps.js";
+        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
+
+        // 🛑 ここに、さっきFirebaseの画面に表示された「あなた専用の鍵」をそのまま貼り付けます
+        const firebaseConfig = {
+          apiKey: "AIzaSy...",
+          authDomain: "tennis-analytics...",
+          projectId: "tennis-analytics...",
+          storageBucket: "...",
+          messagingSenderId: "...",
+          appId: "..."
+        };
+
+        // 🛑 Firebaseとデータベースを起動する命令
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
         const STORAGE_KEY = 'tennis_analytics_permanent_history';
 
         let matchMeta = { id: '', date: '', pAName: '', pBName: '', format: '6', rule: 'normal', isFinished: false };
