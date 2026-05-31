@@ -55,13 +55,11 @@
         /* 入力エリアの横幅を活かした配置 */
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 15px; }
         .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px; margin-bottom: 15px; }
-        .grid-course { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-bottom: 20px; } /* コースをゆったり配置 */
         
         /* 選択式ボタン */
         .select-btn { background: #334155; color: #cbd5e1; border: 2px solid transparent; padding: 16px 12px; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 16px; transition: all 0.15s; }
         .select-btn:active { transform: scale(0.98); }
         .select-btn.selected { background: #1e3a8a; color: white; border-color: #3b82f6; box-shadow: 0 0 12px rgba(59,130,246,0.5); }
-        .btn-playerA.selected, .btn-playerB.selected { background: #1e3a8a; border-color: #3b82f6; }
         
         /* ログ・コンソール */
         .log-box { background: #0f172a; padding: 15px; border-radius: 8px; min-height: 54px; display: flex; align-items: center; color: #cbd5e1; font-size: 15px; border: 1px solid #334155; margin-bottom: 20px; font-family: monospace; }
@@ -168,8 +166,8 @@
 
             <div class="card-title">① 打鍵したプレイヤーを選択</div>
             <div class="grid-2">
-                <button id="btn-playerA" class="select-btn btn-playerA selected" onclick="selectPlayer('A')">Player A</button>
-                <button id="btn-playerB" class="select-btn btn-playerB" onclick="selectPlayer('B')">Player B</button>
+                <button id="btn-playerA" class="select-btn selected" onclick="selectPlayer('A')">Player A</button>
+                <button id="btn-playerB" class="select-btn" onclick="selectPlayer('B')">Player B</button>
             </div>
 
             <div class="card-title" style="margin-top:20px;">② ショット種別</div>
@@ -410,7 +408,6 @@
             matchMeta.isFinished = false;
 
             score = { aPt: 0, bPt: 0, aGame: 0, bGame: 0, aSet: 0, bSet: 0, isTiebreak: false };
-            statsCounter = { createEmptyStats(), B: createEmptyStats() };
             statsCounter = { A: createEmptyStats(), B: createEmptyStats() };
             currentGameServer = 'A'; shotHistoryStack = [];
             
@@ -428,11 +425,8 @@
             document.getElementById('btn-playerA').innerText = matchMeta.pAName;
             document.getElementById('btn-playerB').innerText = matchMeta.pBName;
             
-            // 各セクションのプレイヤー名ラベル設定
             if(document.getElementById('ace-title-A')) document.getElementById('ace-title-A').innerText = `■ ${matchMeta.pAName} のエース位置`;
             if(document.getElementById('ace-title-B')) document.getElementById('ace-title-B').innerText = `■ ${matchMeta.pBName} のエース位置`;
-            if(document.getElementById('missn-title-A')) document.getElementById('missn-title-A').innerText = `■ ネットミス数 (フォア / バック / ボレー)`;
-            if(document.getElementById('misso-title-A')) document.getElementById('misso-title-A').innerText = `■ アウトミス数 (フォア / バック / ボレー)`;
             
             if(document.getElementById('stat-name-A')) document.getElementById('stat-name-A').innerText = matchMeta.pAName;
             if(document.getElementById('stat-name-B')) document.getElementById('stat-name-B').innerText = matchMeta.pBName;
