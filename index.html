@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>テニス 選手別マルチアナリティクス v13.2</title>
+    <title>テニス 選手別マルチアナリティクス v13.2 (ローカル版)</title>
     <style>
         * { box-sizing: border-box; user-select: none; margin: 0; padding: 0; }
         body {
@@ -85,8 +85,8 @@
         .clickable-row { background: #0f172a; cursor: pointer; border: 1px solid #38bdf8 !important; }
         .detail-analysis-box { margin-top: 8px; background: #0f172a; padding: 8px; border-radius: 6px; border: 1px solid #334155; }
         .tab-container { display: flex; gap: 4px; margin-bottom: 5px; }
-        .tab-btn { flex: 1; padding: 6px; font-size: 0.8rem; font-weight: bold; border: none; border-radius: 4px; background: #334155; color: #94a3b8; cursor: pointer; }
-        .tab-btn.active { background: #3b82f6; color: white; }
+        .tab-container button { flex: 1; padding: 6px; font-size: 0.8rem; font-weight: bold; border: none; border-radius: 4px; background: #334155; color: #94a3b8; cursor: pointer; }
+        .tab-container button.active { background: #3b82f6; color: white; }
         
         .sub-header-title { font-size: 0.85rem; color: #38bdf8; margin-top: 10px; margin-bottom: 4px; border-left: 3px solid #38bdf8; padding-left: 6px; }
 
@@ -263,23 +263,8 @@
         <button id="nav-toggle-btn" class="nav-btn" onclick="toggleInputStats()">📊 集計画面を見る</button>
     </footer>
 
-    <script type="module">
-        // Firebaseライブラリの読み込み
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-apps.js";
-        import { getFirestore, doc, setDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js";
-
-        // Firebase設定情報
-        const firebaseConfig = {
-          apiKey: "AIzaSy...",
-          authDomain: "tennis-analytics-574d0.firebaseapp.com",
-          projectId: "tennis-analytics-574d0",
-          storageBucket: "tennis-analytics-574d0.firebasestorage.app",
-          messagingSenderId: "437341861715",
-          appId: "1:437341861715:web:8c38cd333deb2b156d53a6"
-        };
-
-        const app = initializeApp(firebaseConfig);
-        const db = getFirestore(app);
+    <script>
+        // Firebase関連の読み込みと同期処理を完全にカットしたローカル動作専用スクリプト
         const STORAGE_KEY = 'tennis_analytics_permanent_history';
 
         let matchMeta = { id: '', date: '', pAName: '', pBName: '', format: '6', rule: 'normal', isFinished: false };
@@ -291,7 +276,7 @@
 
         function createEmptyStats() {
             let obj = {
-                firstTotal: 0, firstIn: 0, secondTotal: 0, df: 0, aces: 0, strokeMiss: 0, otherPt: 0,
+                firstTotal: 0, firstIn: 0, secondTotal: 0, secondIn: 0, df: 0, aces: 0, strokeMiss: 0, otherPt: 0,
                 countFore: 0, countBack: 0, countVolley: 0, netFore: 0, netBack: 0, netVolley: 0, outFore: 0, outBack: 0, outVolley: 0, aceMatrix: {}
             };
             SHOTS.forEach(s => { obj.aceMatrix[s] = {}; COURSES.forEach(c => { obj.aceMatrix[s][c] = 0; }); });
@@ -302,7 +287,6 @@
         let isFirstServe = true;
         let currentInput = { player: 'A', shot: 'サーブ', course: '' };
         let shotHistoryStack = [];
-        let unsubscribeMatch = null; // リモート同期解除用
 
         window.onload = function() {
             document.getElementById('match-date').value = new Date().toISOString().split('T')[0];
@@ -332,8 +316,8 @@
             localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
         }
 
-        // Firebase（クラウド）へデータを送信する仕組み
-        async function saveMatchData() {
+        // ローカル(スマホ内・PC内)にのみデータを保存する仕組み
+        function saveMatchData() {
             const matchData = {
                 meta: matchMeta,
                 score: score,
@@ -346,51 +330,10 @@
                 updatedAt: Date.now()
             };
 
-            // 1. ローカル(スマホ内)に保存
             let history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
             const idx = history.findIndex(m => m.meta.id === matchMeta.id);
             if (idx >= 0) history[idx] = matchData; else history.push(matchData);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(history));
-
-            // 2. クラウド(Firebase)にリアルタイム同期送信
-            if (matchMeta.id) {
-                try {
-                    await setDoc(doc(db, "matches", matchMeta.id), matchData);
-                } catch (e) {
-                    console.error("Firebaseへの同期に失敗しました: ", e);
-                }
-            }
-        }
-
-        // Firebaseからデータを受信して画面を自動更新する仕組み（他端末連動用）
-        function listenToRemoteMatch(matchId) {
-            if (unsubscribeMatch) unsubscribeMatch();
-            unsubscribeMatch = onSnapshot(doc(db, "matches", matchId), (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    // クラウド側のデータの方が新しい場合のみ画面を書き換える
-                    if (!data.updatedAt || data.updatedAt > (window.lastLocalUpdate || 0)) {
-                        matchMeta = data.meta;
-                        score = data.score;
-                        currentGameServer = data.server;
-                        statsCounter = data.stats;
-                        currentRallyCount = data.rally;
-                        isFirstServe = data.isFirstServe;
-                        currentInput = data.currentInput;
-                        shotHistoryStack = data.historyStack || [];
-                        
-                        setupActiveMatchUI();
-                        updateUI();
-                        calculateStatsAndRender();
-
-                        // 試合が終了していたらホームへ
-                        if (matchMeta.isFinished && !document.getElementById('screen-input').classList.contains('hidden')) {
-                            alert(`試合終了！勝者: ${score.aGame > score.bGame ? matchMeta.pAName : matchMeta.pBName}`);
-                            goToHome();
-                        }
-                    }
-                }
-            });
         }
 
         function startNewMatch() {
@@ -411,9 +354,6 @@
             document.getElementById('screen-input').classList.remove('hidden');
             document.getElementById('app-footer').classList.remove('hidden');
             prepareNextPoint();
-
-            // リアルタイムリスナー開始
-            listenToRemoteMatch(matchMeta.id);
         }
 
         function setupActiveMatchUI() {
@@ -442,13 +382,13 @@
             document.getElementById('btn-resume-from-stats').classList.remove('hidden');
         }
 
-        window.selectPlayer = function(pKey) {
+        function selectPlayer(pKey) {
             currentInput.player = pKey;
             document.getElementById('btn-playerA').classList.toggle('selected', pKey === 'A');
             document.getElementById('btn-playerB').classList.toggle('selected', pKey === 'B');
         }
 
-        window.selectShot = function(shot) {
+        function selectShot(shot) {
             currentInput.shot = shot;
             ['fore', 'back', 'volley', 'serve'].forEach(s => document.getElementById(`btn-${s}`).classList.remove('selected'));
             if(shot === 'フォア') document.getElementById('btn-fore').classList.add('selected');
@@ -457,7 +397,7 @@
             if(shot === 'サーブ') document.getElementById('btn-serve').classList.add('selected');
         }
 
-        window.selectCourse = function(course) {
+        function selectCourse(course) {
             if (!currentInput.shot) return;
             currentInput.course = course;
             
@@ -479,7 +419,7 @@
             if (currentInput.shot === 'ボレー') statsCounter[hitter].countVolley++;
             if (currentInput.shot === 'サーブ' && currentRallyCount === 0) {
                 if (isFirstServe) { statsCounter[hitter].firstTotal++; statsCounter[hitter].firstIn++; } 
-                else { statsCounter[hitter].secondTotal++; }
+                else { statsCounter[hitter].secondTotal++; statsCounter[hitter].secondIn++; }
             }
 
             logMessage(`> ${hitter==='A'?matchMeta.pAName:matchMeta.pBName} が ${currentInput.shot} ［${currentInput.course}］`);
@@ -488,28 +428,17 @@
             const nextPlayer = (hitter === 'A' ? 'B' : 'A');
             selectPlayer(nextPlayer);
             selectShot(currentInput.shot === 'ボレー' ? 'フォア' : currentInput.shot);
-            window.lastLocalUpdate = Date.now();
             updateUI(); saveMatchData();
         }
 
-        window.selectResult = function(resultType) {
+        function selectResult(resultType) {
             const hitter = currentInput.player; 
-            window.lastLocalUpdate = Date.now();
-            
-            // 履歴に現在の状態をスタック（Undo用）
-            shotHistoryStack.push({
-                rallyCount: currentRallyCount, isFirstServe: isFirstServe,
-                inputState: { ...currentInput }, scoreState: { ...score },
-                statsState: JSON.parse(JSON.stringify(statsCounter)),
-                serverState: currentGameServer
-            });
-
             if (resultType === 'エース') {
                 const winner = (hitter === 'A' ? 'B' : 'A');
                 let wName = winner === 'A' ? matchMeta.pAName : matchMeta.pBName;
                 statsCounter[winner].aces++;
-                if (currentRallyCount > 0 && shotHistoryStack.length > 1) {
-                    let last = shotHistoryStack[shotHistoryStack.length - 2].inputState;
+                if (shotHistoryStack.length > 0) {
+                    let last = shotHistoryStack[shotHistoryStack.length - 1].inputState;
                     statsCounter[winner].aceMatrix[last.shot || 'フォア'][last.course || 'クロス']++;
                 } else {
                     statsCounter[winner].aceMatrix['サーブ']['センター']++;
@@ -524,9 +453,7 @@
                         logMessage(`> ⚠️ ${lName} 1stフォルト`);
                         selectPlayer(hitter); selectShot('サーブ'); updateUI(); saveMatchData(); return;
                     } else {
-                        statsCounter[hitter].secondTotal++; 
-                        statsCounter[hitter].df++;
-                        statsCounter[hitter].strokeMiss++; // ダブルフォルトもミス総数に1点加算
+                        statsCounter[hitter].secondTotal++; statsCounter[hitter].df++;
                         logMessage(`> 🛑 ${lName} ダブルフォルト`);
                         addPoint(hitter === 'A' ? 'B' : 'A'); return;
                     }
@@ -547,18 +474,8 @@
             }
         }
 
-        window.addDirectPointFromConsole = function() {
-            const target = currentInput.player; 
-            window.lastLocalUpdate = Date.now();
-            
-            shotHistoryStack.push({
-                rallyCount: currentRallyCount, isFirstServe: isFirstServe,
-                inputState: { ...currentInput }, scoreState: { ...score },
-                statsState: JSON.parse(JSON.stringify(statsCounter)),
-                serverState: currentGameServer
-            });
-
-            statsCounter[target].otherPt++;
+        function addDirectPointFromConsole() {
+            const target = currentInput.player; statsCounter[target].otherPt++;
             logMessage(`> 🚨 見逃し判定 ［${target==='A'?matchMeta.pAName:matchMeta.pBName}］ Pt追加`);
             addPoint(target);
         }
@@ -608,9 +525,8 @@
 
         function logMessage(msg) { document.getElementById('log-display').innerText = msg; }
 
-        window.undoLastShot = function() {
+        function undoLastShot() {
             if (shotHistoryStack.length === 0) return;
-            window.lastLocalUpdate = Date.now();
             const prevState = shotHistoryStack.pop();
             currentRallyCount = prevState.rallyCount; 
             isFirstServe = prevState.isFirstServe;
@@ -622,15 +538,13 @@
             updateUI(); saveMatchData();
         }
 
-        // スタッツ集計と画面表示処理
         function calculateStatsAndRender() {
             const calcPct = (inCount, total) => total === 0 ? '-' : Math.round((inCount / total) * 100) + '%';
-            const calc2ndPct = (dfCount, total) => total === 0 ? '-' : Math.round(((total - dfCount) / total) * 100) + '%';
             
             document.getElementById('stat-A-1st').innerText = calcPct(statsCounter.A.firstIn, statsCounter.A.firstTotal);
             document.getElementById('stat-B-1st').innerText = calcPct(statsCounter.B.firstIn, statsCounter.B.firstTotal);
-            document.getElementById('stat-A-2nd').innerText = calc2ndPct(statsCounter.A.df, statsCounter.A.secondTotal);
-            document.getElementById('stat-B-2nd').innerText = calc2ndPct(statsCounter.B.df, statsCounter.B.secondTotal);
+            document.getElementById('stat-A-2nd').innerText = calcPct(statsCounter.B.df, statsCounter.A.secondTotal);
+            document.getElementById('stat-B-2nd').innerText = calcPct(statsCounter.A.df, statsCounter.B.secondTotal);
             
             document.getElementById('stat-A-df').innerText = statsCounter.A.df;
             document.getElementById('stat-B-df').innerText = statsCounter.B.df;
@@ -652,7 +566,6 @@
             document.getElementById('ratio-A-volley').innerText = calcRatio(statsCounter.A.countVolley, totalA);
             document.getElementById('ratio-B-volley').innerText = calcRatio(statsCounter.B.countVolley, totalB);
 
-            // ミス内訳
             document.getElementById('net-A-fore').innerText = statsCounter.A.netFore;
             document.getElementById('net-B-fore').innerText = statsCounter.B.netFore;
             document.getElementById('net-A-back').innerText = statsCounter.A.netBack;
@@ -667,7 +580,6 @@
             document.getElementById('out-A-volley').innerText = statsCounter.A.outVolley;
             document.getElementById('out-B-volley').innerText = statsCounter.B.outVolley;
 
-            // マトリクステーブル生成
             renderMatrix('matrix-ace-A', statsCounter.A.aceMatrix);
             renderMatrix('matrix-ace-B', statsCounter.B.aceMatrix);
         }
@@ -682,7 +594,6 @@
             if(document.getElementById(targetId)) document.getElementById(targetId).innerHTML = html;
         }
 
-        // ダッシュボード履歴の読み込み
         function loadDashboard() {
             const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
             const resumeList = document.getElementById('resume-list');
@@ -716,7 +627,6 @@
                             <button class="action-btn" onclick="window.viewPastStats('${m.meta.id}')">分析</button>
                         </div>`;
                     
-                    // 個人成績の加算
                     [m.meta.pAName, m.meta.pBName].forEach(p => { if(!pStats[p]) pStats[p] = { win:0, lose:0 }; });
                     if(m.score.aGame > m.score.bGame) { pStats[m.meta.pAName].win++; pStats[m.meta.pBName].lose++; }
                     else { pStats[m.meta.pBName].win++; pStats[m.meta.pAName].lose++; }
@@ -725,7 +635,6 @@
 
             document.getElementById('resume-section-area').classList.toggle('hidden', !hasActive);
 
-            // 選手一覧の表示
             for(let p in pStats) {
                 const total = pStats[p].win + pStats[p].lose;
                 const rate = total === 0 ? '0%' : Math.round((pStats[p].win / total) * 100) + '%';
@@ -740,7 +649,6 @@
             }
         }
 
-        // グローバルに関数を公開してHTMLボタンから呼べるようにする
         window.resumeMatch = function(matchId) {
             const history = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
             const m = history.find(x => x.meta.id === matchId);
@@ -753,8 +661,6 @@
             document.getElementById('screen-home').classList.add('hidden');
             document.getElementById('screen-input').classList.remove('hidden');
             document.getElementById('app-footer').classList.remove('hidden');
-
-            listenToRemoteMatch(matchId); // リアルタイム同期開始
         };
 
         window.deleteMatch = function(matchId) {
@@ -789,11 +695,9 @@
                 let oppName = side === 'A' ? m.meta.pBName : m.meta.pAName;
                 let isWin = side === 'A' ? (m.score.aGame > m.score.bGame) : (m.score.bGame > m.score.aGame);
 
-                // 対戦相手別データ
                 if(!versus[oppName]) versus[oppName] = { win:0, lose:0 };
                 if(isWin) versus[oppName].win++; else versus[oppName].lose++;
 
-                // スタッツ合算
                 let s = m.stats[side];
                 total.firstTotal += s.firstTotal; total.firstIn += s.firstIn;
                 total.secondTotal += s.secondTotal; total.df += s.df; total.aces += s.aces;
@@ -809,7 +713,6 @@
 
             setupActiveMatchUI(); calculateStatsAndRender();
 
-            // 対戦成績テーブル生成
             let vHtml = `<thead><tr><th>対戦相手</th><th>勝敗</th><th>勝率</th></tr></thead><tbody>`;
             for(let op in versus) {
                 let t = versus[op].win + versus[op].lose;
@@ -831,7 +734,6 @@
         };
 
         window.goToHome = function() {
-            if (unsubscribeMatch) { unsubscribeMatch(); unsubscribeMatch = null; }
             document.getElementById('screen-input').classList.add('hidden');
             document.getElementById('screen-stats').classList.add('hidden');
             document.getElementById('app-footer').classList.add('hidden');
