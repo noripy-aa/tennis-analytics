@@ -291,7 +291,7 @@
 
         function createEmptyStats() {
             let obj = {
-                firstTotal: 0, firstIn: 0, secondTotal: 0, secondIn: 0, df: 0, aces: 0, strokeMiss: 0, otherPt: 0,
+                firstTotal: 0, firstIn: 0, secondTotal: 0, df: 0, aces: 0, strokeMiss: 0, otherPt: 0,
                 countFore: 0, countBack: 0, countVolley: 0, netFore: 0, netBack: 0, netVolley: 0, outFore: 0, outBack: 0, outVolley: 0, aceMatrix: {}
             };
             SHOTS.forEach(s => { obj.aceMatrix[s] = {}; COURSES.forEach(c => { obj.aceMatrix[s][c] = 0; }); });
@@ -442,13 +442,13 @@
             document.getElementById('btn-resume-from-stats').classList.remove('hidden');
         }
 
-        function selectPlayer(pKey) {
+        window.selectPlayer = function(pKey) {
             currentInput.player = pKey;
             document.getElementById('btn-playerA').classList.toggle('selected', pKey === 'A');
             document.getElementById('btn-playerB').classList.toggle('selected', pKey === 'B');
         }
 
-        function selectShot(shot) {
+        window.selectShot = function(shot) {
             currentInput.shot = shot;
             ['fore', 'back', 'volley', 'serve'].forEach(s => document.getElementById(`btn-${s}`).classList.remove('selected'));
             if(shot === 'フォア') document.getElementById('btn-fore').classList.add('selected');
@@ -457,7 +457,7 @@
             if(shot === 'サーブ') document.getElementById('btn-serve').classList.add('selected');
         }
 
-        function selectCourse(course) {
+        window.selectCourse = function(course) {
             if (!currentInput.shot) return;
             currentInput.course = course;
             
@@ -479,7 +479,7 @@
             if (currentInput.shot === 'ボレー') statsCounter[hitter].countVolley++;
             if (currentInput.shot === 'サーブ' && currentRallyCount === 0) {
                 if (isFirstServe) { statsCounter[hitter].firstTotal++; statsCounter[hitter].firstIn++; } 
-                else { statsCounter[hitter].secondTotal++; statsCounter[hitter].secondIn++; }
+                else { statsCounter[hitter].secondTotal++; }
             }
 
             logMessage(`> ${hitter==='A'?matchMeta.pAName:matchMeta.pBName} が ${currentInput.shot} ［${currentInput.course}］`);
@@ -492,15 +492,24 @@
             updateUI(); saveMatchData();
         }
 
-        function selectResult(resultType) {
+        window.selectResult = function(resultType) {
             const hitter = currentInput.player; 
             window.lastLocalUpdate = Date.now();
+            
+            // 履歴に現在の状態をスタック（Undo用）
+            shotHistoryStack.push({
+                rallyCount: currentRallyCount, isFirstServe: isFirstServe,
+                inputState: { ...currentInput }, scoreState: { ...score },
+                statsState: JSON.parse(JSON.stringify(statsCounter)),
+                serverState: currentGameServer
+            });
+
             if (resultType === 'エース') {
                 const winner = (hitter === 'A' ? 'B' : 'A');
                 let wName = winner === 'A' ? matchMeta.pAName : matchMeta.pBName;
                 statsCounter[winner].aces++;
-                if (shotHistoryStack.length > 0) {
-                    let last = shotHistoryStack[shotHistoryStack.length - 1].inputState;
+                if (currentRallyCount > 0 && shotHistoryStack.length > 1) {
+                    let last = shotHistoryStack[shotHistoryStack.length - 2].inputState;
                     statsCounter[winner].aceMatrix[last.shot || 'フォア'][last.course || 'クロス']++;
                 } else {
                     statsCounter[winner].aceMatrix['サーブ']['センター']++;
@@ -515,7 +524,9 @@
                         logMessage(`> ⚠️ ${lName} 1stフォルト`);
                         selectPlayer(hitter); selectShot('サーブ'); updateUI(); saveMatchData(); return;
                     } else {
-                        statsCounter[hitter].secondTotal++; statsCounter[hitter].df++;
+                        statsCounter[hitter].secondTotal++; 
+                        statsCounter[hitter].df++;
+                        statsCounter[hitter].strokeMiss++; // ダブルフォルトもミス総数に1点加算
                         logMessage(`> 🛑 ${lName} ダブルフォルト`);
                         addPoint(hitter === 'A' ? 'B' : 'A'); return;
                     }
@@ -536,10 +547,19 @@
             }
         }
 
-        function addDirectPointFromConsole() {
-            const target = currentInput.player; statsCounter[target].otherPt++;
-            logMessage(`> 🚨 見逃し判定 ［${target==='A'?matchMeta.pAName:matchMeta.pBName}］ Pt追加`);
+        window.addDirectPointFromConsole = function() {
+            const target = currentInput.player; 
             window.lastLocalUpdate = Date.now();
+            
+            shotHistoryStack.push({
+                rallyCount: currentRallyCount, isFirstServe: isFirstServe,
+                inputState: { ...currentInput }, scoreState: { ...score },
+                statsState: JSON.parse(JSON.stringify(statsCounter)),
+                serverState: currentGameServer
+            });
+
+            statsCounter[target].otherPt++;
+            logMessage(`> 🚨 見逃し判定 ［${target==='A'?matchMeta.pAName:matchMeta.pBName}］ Pt追加`);
             addPoint(target);
         }
 
@@ -588,7 +608,7 @@
 
         function logMessage(msg) { document.getElementById('log-display').innerText = msg; }
 
-        function undoLastShot() {
+        window.undoLastShot = function() {
             if (shotHistoryStack.length === 0) return;
             window.lastLocalUpdate = Date.now();
             const prevState = shotHistoryStack.pop();
@@ -605,14 +625,15 @@
         // スタッツ集計と画面表示処理
         function calculateStatsAndRender() {
             const calcPct = (inCount, total) => total === 0 ? '-' : Math.round((inCount / total) * 100) + '%';
+            const calc2ndPct = (dfCount, total) => total === 0 ? '-' : Math.round(((total - dfCount) / total) * 100) + '%';
             
             document.getElementById('stat-A-1st').innerText = calcPct(statsCounter.A.firstIn, statsCounter.A.firstTotal);
             document.getElementById('stat-B-1st').innerText = calcPct(statsCounter.B.firstIn, statsCounter.B.firstTotal);
-            document.getElementById('stat-A-2nd').innerText = calcPct(statsCounter.B.df, statsCounter.A.secondTotal); // 相手DF除外等のロジック
-            document.getElementById('stat-B-2nd').innerText = calcPct(statsCounter.A.df, statsCounter.B.secondTotal);
+            document.getElementById('stat-A-2nd').innerText = calc2ndPct(statsCounter.A.df, statsCounter.A.secondTotal);
+            document.getElementById('stat-B-2nd').innerText = calc2ndPct(statsCounter.B.df, statsCounter.B.secondTotal);
             
             document.getElementById('stat-A-df').innerText = statsCounter.A.df;
-            document.getElementById('stat-B-df').innerText = statsCounter.bPt ? statsCounter.B.df : statsCounter.B.df;
+            document.getElementById('stat-B-df').innerText = statsCounter.B.df;
             document.getElementById('stat-A-ace').innerText = statsCounter.A.aces;
             document.getElementById('stat-B-ace').innerText = statsCounter.B.aces;
             document.getElementById('stat-A-miss').innerText = statsCounter.A.strokeMiss;
